@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF to DXF Converter v1.06</title>
+    <title>PDF to DXF Converter v1.07</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -131,7 +131,7 @@
 <body>
 
     <div class="container">
-        <h1>PDF to DXF Converter v1.06</h1>
+        <h1>PDF to DXF Converter v1.07</h1>
         <p>CADから出力されたベクトルPDFをDXFに変換します。</p>
 
         <div class="controls">
@@ -172,7 +172,7 @@
         <div class="info">
             <p>※ 注意事項:</p>
             <ul>
-                <li>v1.06: DXFファイルの生成方式を改善し、アプリ間での互換性を向上させました。</li>
+                <li>v1.07: プレビューの描画ロジックを修正しました（線幅を固定化）。</li>
                 <li>スキャンされた画像PDF（ラスター）は変換できません。線情報を持つPDFのみ対応しています。</li>
             </ul>
         </div>
@@ -460,10 +460,7 @@ DXF生成中...`;
         }
 
         function generateDXF(paths) {
-            // 文字列連結ではなく配列で管理し、最後に結合することで
-            // 不要な空行の混入を防ぐ堅牢な実装に変更
             const lines = [];
-            
             const add = (code, value) => {
                 lines.push(code);
                 lines.push(value);
@@ -502,7 +499,7 @@ DXF生成中...`;
                     add(11, p.x2.toFixed(4));
                     add(21, p.y2.toFixed(4));
                     add(31, 0.0);
-                    add(62, 1); // Color Red (強制表示)
+                    add(62, 1); // Red
                 }
             });
 
@@ -545,7 +542,9 @@ DXF生成中...`;
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.strokeStyle = '#000';
-            ctx.lineWidth = 1;
+            
+            // 重要修正: 線幅をスケーリングに追従させない（常に1pxで描画）
+            ctx.lineWidth = 1 / scale; 
 
             ctx.save();
             ctx.translate(cWidth / 2, cHeight / 2);
