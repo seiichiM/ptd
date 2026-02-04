@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF to DXF Converter v1.10 (Debug)</title>
+    <title>PDF Raster to DXF Converter v1.11</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -15,17 +15,14 @@
             flex-direction: column;
             align-items: center;
         }
-        h1 {
-            color: #2c3e50;
-            margin-bottom: 20px;
-        }
+        h1 { color: #2c3e50; margin-bottom: 20px; }
         .container {
             background-color: #fff;
             padding: 30px;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             width: 100%;
-            max-width: 800px;
+            max-width: 900px;
             text-align: center;
         }
         .controls {
@@ -35,81 +32,67 @@
             gap: 15px;
             align-items: center;
         }
-        input[type="file"] {
-            display: none;
+        .row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
         }
-        .file-upload-label {
+        input[type="file"] { display: none; }
+        .btn {
             background-color: #3498db;
             color: white;
             padding: 10px 20px;
             border-radius: 5px;
             cursor: pointer;
-            transition: background-color 0.3s;
-            display: inline-block;
-        }
-        .file-upload-label:hover {
-            background-color: #2980b9;
-        }
-        button {
-            background-color: #2ecc71;
-            color: white;
             border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
-            cursor: pointer;
             font-size: 16px;
             transition: background-color 0.3s;
+            text-decoration: none;
+            display: inline-block;
         }
-        button:hover {
-            background-color: #27ae60;
-        }
-        button:disabled {
-            background-color: #95a5a6;
-            cursor: not-allowed;
-        }
-        #status {
-            margin-top: 10px;
-            font-weight: bold;
-            min-height: 24px;
-            white-space: pre-wrap;
-        }
-        #preview-container {
+        .btn:hover { background-color: #2980b9; }
+        .btn:disabled { background-color: #95a5a6; cursor: not-allowed; }
+        .btn-success { background-color: #2ecc71; }
+        .btn-success:hover { background-color: #27ae60; }
+        
+        #status { margin-top: 10px; font-weight: bold; min-height: 24px; white-space: pre-wrap; }
+        
+        .preview-area {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
             margin-top: 20px;
+        }
+        .canvas-container {
             border: 1px solid #ddd;
-            width: 100%;
-            height: 500px;
-            overflow: auto;
-            position: relative;
             background-color: #fafafa;
-        }
-        canvas {
-            display: block;
-            margin: 0 auto;
-        }
-        .info {
-            font-size: 0.9em;
-            color: #666;
-            margin-top: 10px;
-            text-align: left;
-        }
-        #debug-info {
-            margin-top: 20px;
             padding: 10px;
-            background: #eee;
-            border: 1px solid #ccc;
-            font-family: monospace;
-            font-size: 12px;
-            text-align: left;
-            white-space: pre-wrap;
-            max-height: 300px;
-            overflow-y: auto;
-            width: 100%;
-            box-sizing: border-box;
-            display: block; /* Always show in debug version */
+            max-width: 100%;
+            overflow: auto;
         }
+        canvas { display: block; max-width: 100%; height: auto; }
+        .label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
+        
+        /* Loading Spinner */
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            display: none;
+            margin: 10px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
-    <!-- PDF.js CDN -->
+    <!-- PDF.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- ImageTracer.js -->
+    <script src="https://cdn.jsdelivr.net/npm/imagetracerjs@1.2.6/imagetracer_v1.2.6.min.js"></script>
 
     <!-- PWA Settings -->
     <link rel="manifest" href="manifest.json">
@@ -123,22 +106,37 @@
 <body>
 
     <div class="container">
-        <h1>PDF to DXF Converter v1.10 (Debug)</h1>
-        <p>内部状態を詳細ログ出力するデバッグ版です。</p>
+        <h1>PDF Raster to DXF Converter v1.11</h1>
+        <p>PDFを画像として読み込み、輪郭をトレースしてDXFに変換します。</p>
 
         <div class="controls">
-            <label for="file-input" class="file-upload-label">PDFファイルを選択</label>
-            <input type="file" id="file-input" accept=".pdf">
-            <span id="file-name">ファイルが選択されていません</span>
+            <div class="row">
+                <label for="file-input" class="btn">PDFファイルを選択</label>
+                <input type="file" id="file-input" accept=".pdf">
+                <span id="file-name">選択なし</span>
+            </div>
             
-            <button id="convert-btn" disabled>変換＆解析開始</button>
+            <div class="row">
+                <label>ページ番号: <input type="number" id="page-num" value="1" min="1" style="width: 50px; padding: 5px;"></label>
+                <label>スケール: <input type="number" id="render-scale" value="2.0" step="0.5" min="1.0" max="4.0" style="width: 60px; padding: 5px;" title="解像度（大きいほど高精細ですが遅くなります）"></label>
+            </div>
+
+            <button id="convert-btn" class="btn btn-success" disabled>変換開始 (Trace & DXF)</button>
+            <div class="spinner" id="spinner"></div>
         </div>
 
         <div id="status"></div>
-        <div id="debug-info"></div>
 
-        <div id="preview-container">
-            <canvas id="preview-canvas"></canvas>
+        <div class="preview-area">
+            <div class="canvas-container">
+                <span class="label">1. PDF Raster Preview</span>
+                <canvas id="pdf-canvas"></canvas>
+            </div>
+            <div class="canvas-container" id="svg-container" style="display:none;">
+                 <span class="label">2. Vector Trace Preview (SVG)</span>
+                 <!-- SVG will be injected here -->
+                 <div id="svg-output"></div>
+            </div>
         </div>
     </div>
 
@@ -149,44 +147,14 @@
         const fileNameDisplay = document.getElementById('file-name');
         const convertBtn = document.getElementById('convert-btn');
         const statusDiv = document.getElementById('status');
-        const canvas = document.getElementById('preview-canvas');
-        const debugInfo = document.getElementById('debug-info');
-        const ctx = canvas.getContext('2d');
+        const pdfCanvas = document.getElementById('pdf-canvas');
+        const pdfCtx = pdfCanvas.getContext('2d');
+        const spinner = document.getElementById('spinner');
+        const pageNumInput = document.getElementById('page-num');
+        const scaleInput = document.getElementById('render-scale');
 
-        let pdfDoc = null;
         let pdfFile = null;
-        let extractedPaths = []; 
-
-        // 状態管理用変数
-        let currentX = 0;
-        let currentY = 0;
-        let pathStart = {x: 0, y: 0};
-        let currentTransform = [1, 0, 0, 1, 0, 0];
-        let transformStack = [];
-        let strokeColor = [0, 0, 0];
-        
-        // Debug
-        let opNames = {};
-        for (const key in pdfjsLib.OPS) {
-            opNames[pdfjsLib.OPS[key]] = key;
-        }
-        let logCount = 0;
-        const MAX_LOGS = 100;
-
-        function logDebug(msg) {
-            if (logCount < MAX_LOGS) {
-                debugInfo.textContent += msg + '\n';
-                logCount++;
-            } else if (logCount === MAX_LOGS) {
-                debugInfo.textContent += '... Log truncated ...\n';
-                logCount++;
-            }
-        }
-
-        function clearDebug() {
-            debugInfo.textContent = '';
-            logCount = 0;
-        }
+        let pdfDoc = null;
 
         fileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
@@ -195,235 +163,263 @@
                 fileNameDisplay.textContent = file.name;
                 convertBtn.disabled = false;
                 statusDiv.textContent = '準備完了。変換ボタンを押してください。';
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                extractedPaths = [];
-                clearDebug();
             }
         });
 
         convertBtn.addEventListener('click', async () => {
             if (!pdfFile) return;
-
+            
             try {
-                clearDebug();
+                setLoading(true);
                 statusDiv.textContent = 'PDFを読み込み中...';
-                convertBtn.disabled = true;
-
+                
+                // 1. Load PDF
                 const arrayBuffer = await pdfFile.arrayBuffer();
                 const loadingTask = pdfjsLib.getDocument({data: arrayBuffer});
                 pdfDoc = await loadingTask.promise;
-
-                statusDiv.textContent = `全 ${pdfDoc.numPages} ページを解析中...`;
-                extractedPaths = [];
-
-                for (let i = 1; i <= pdfDoc.numPages; i++) {
-                    await processPage(i);
-                }
-
-                logDebug(`\nTotal extracted paths: ${extractedPaths.length}`);
                 
-                if (extractedPaths.length === 0) {
-                    statusDiv.innerHTML = '<span style="color:red;">線分データが見つかりませんでした。</span>';
-                    return;
+                const pageNum = parseInt(pageNumInput.value) || 1;
+                if (pageNum > pdfDoc.numPages || pageNum < 1) {
+                    throw new Error(`ページ ${pageNum} は存在しません。全 ${pdfDoc.numPages} ページです。`);
                 }
 
-                // DXF生成とダウンロードは省略し、まずはデータ解析の正当性を確認
-                statusDiv.textContent = `解析完了: ${extractedPaths.length} 本の線分を検出。`;
-                drawPreview(extractedPaths);
+                // 2. Render Page to Canvas
+                statusDiv.textContent = `ページ ${pageNum} をレンダリング中...`;
+                const page = await pdfDoc.getPage(pageNum);
+                const viewport = page.getViewport({scale: parseFloat(scaleInput.value) || 2.0});
+
+                pdfCanvas.width = viewport.width;
+                pdfCanvas.height = viewport.height;
+                
+                // 白背景で塗りつぶす（透明だとトレースがおかしくなる場合があるため）
+                pdfCtx.fillStyle = '#ffffff';
+                pdfCtx.fillRect(0, 0, pdfCanvas.width, pdfCanvas.height);
+
+                await page.render({
+                    canvasContext: pdfCtx,
+                    viewport: viewport
+                }).promise;
+
+                // 3. Trace to Vectors (ImageTracer)
+                statusDiv.textContent = '画像をベクトル化（トレース）中... この処理には時間がかかる場合があります。';
+                
+                // Wait a moment for UI to update
+                await new Promise(r => setTimeout(r, 100));
+
+                const imgData = pdfCtx.getImageData(0, 0, pdfCanvas.width, pdfCanvas.height);
+                
+                // ImageTracer options
+                const options = {
+                    ltres: 1,
+                    qtres: 1,
+                    pathomit: 8,
+                    rightangleenhance: true,
+                    colorsampling: 2, // 0: disabled, 1: random, 2: deterministic
+                    numberofcolors: 2, // Black and white mostly
+                    mincolorratio: 0.02,
+                    colorquantcycles: 3,
+                    scale: 1,
+                    simplify: 0,
+                    strokewidth: 1,
+                    // layercontainerid: 'svg-output' // We handle output manually
+                };
+
+                // ImageTracer needs an ImageData object.
+                // Since ImageTracer.imageToSVG works with URL or ID, we use imagedataToSVG helper if available or convert canvas to URL.
+                // ImageTracer.js 1.2.6 structure:
+                // ImageTracer.imageToSVG( url, callback, options )
+                // ImageTracer.imagedataToSVG( imagedata, options ) -> returns SVG string synchronously? No, it returns string data.
+                
+                const svgString = ImageTracer.imagedataToSVG(imgData, options);
+
+                // Display SVG Preview
+                document.getElementById('svg-output').innerHTML = svgString;
+                document.getElementById('svg-container').style.display = 'block';
+
+                // 4. Convert SVG to DXF
+                statusDiv.textContent = 'DXFデータを生成中...';
+                const dxfContent = svgToDxf(svgString, pdfCanvas.height);
+                
+                // 5. Download
+                downloadDxf(dxfContent, `converted_${pdfFile.name}.dxf`);
+                statusDiv.textContent = '変換完了！ダウンロードが開始されました。';
 
             } catch (error) {
                 console.error(error);
                 statusDiv.textContent = 'エラーが発生しました: ' + error.message;
             } finally {
-                convertBtn.disabled = false;
+                setLoading(false);
             }
         });
 
-        async function processPage(pageNum) {
-            const page = await pdfDoc.getPage(pageNum);
-            const operatorList = await page.getOperatorList();
-            
-            // 状態リセット
-            currentX = 0;
-            currentY = 0;
-            pathStart = {x: 0, y: 0};
-            transformStack = [];
-            currentTransform = [1, 0, 0, 1, 0, 0]; 
-            strokeColor = [0, 0, 0];
-            
-            logDebug(`--- Page ${pageNum} ---`);
-            logDebug(`Initial Transform: ${currentTransform.join(', ')}`);
-
-            const ops = operatorList.fnArray;
-            const args = operatorList.argsArray;
-
-            processOperators(ops, args);
+        function setLoading(isLoading) {
+            spinner.style.display = isLoading ? 'block' : 'none';
+            convertBtn.disabled = isLoading;
+            fileInput.disabled = isLoading;
         }
 
-        function processOperators(ops, args) {
-            for (let i = 0; i < ops.length; i++) {
-                const op = ops[i];
-                const arg = args[i];
-                const opName = opNames[op] || op;
+        // SVG string parser to DXF converter
+        function svgToDxf(svgString, height) {
+            let dxf = "";
+            
+            // Header
+            dxf += "0\nSECTION\n2\nHEADER\n0\nENDSEC\n";
+            dxf += "0\nSECTION\n2\nTABLES\n0\nENDSEC\n";
+            dxf += "0\nSECTION\n2\nBLOCKS\n0\nENDSEC\n";
+            dxf += "0\nSECTION\n2\nENTITIES\n";
 
-                // 重要なオペレータのみログ出力、またはNaN発生時
-                const isImportant = [
-                    pdfjsLib.OPS.moveTo, 
-                    pdfjsLib.OPS.lineTo, 
-                    pdfjsLib.OPS.transform, 
-                    pdfjsLib.OPS.save, 
-                    pdfjsLib.OPS.restore,
-                    pdfjsLib.OPS.constructPath
-                ].includes(op);
-
-                if (isImportant || logCount < 20) {
-                    let argStr = "";
-                    if (arg) {
-                        if (Array.isArray(arg)) {
-                            // ネストされた配列は省略
-                             if (arg.length > 0 && Array.isArray(arg[0])) {
-                                 argStr = "[Nested Arrays...]";
-                             } else {
-                                 argStr = "[" + arg.map(v => typeof v === 'number' ? v.toFixed(2) : v).join(", ") + "]";
-                             }
-                        } else {
-                            argStr = String(arg);
+            // Parse paths
+            const pathRegex = /<path[^>]*d="([^"]+)"[^>]*>/g;
+            let match;
+            
+            while ((match = pathRegex.exec(svgString)) !== null) {
+                const d = match[1];
+                const commands = parsePathData(d);
+                
+                let startX = 0, startY = 0;
+                let currX = 0, currY = 0;
+                
+                commands.forEach(cmd => {
+                    const type = cmd.type; // M, L, Z, Q (Uppercased for type check, but logic handles relative inside parser or here)
+                    // Wait, parsePathData should return absolute coordinates for simplicity in this loop
+                    // So we delegate relative-to-absolute conversion to parsePathData
+                    
+                    const values = cmd.values; // These should be absolute coordinates now
+                    
+                    if (type === 'M') {
+                        currX = values[0];
+                        currY = values[1];
+                        startX = currX;
+                        startY = currY;
+                    } else if (type === 'L') {
+                        const nextX = values[0];
+                        const nextY = values[1];
+                        dxf += addLine(currX, height - currY, nextX, height - nextY);
+                        currX = nextX;
+                        currY = nextY;
+                    } else if (type === 'Z') {
+                        if (currX !== startX || currY !== startY) {
+                            dxf += addLine(currX, height - currY, startX, height - startY);
                         }
+                        currX = startX;
+                        currY = startY;
                     }
-                    logDebug(`Op: ${opName} Args: ${argStr}`);
-                }
+                });
+            }
 
-                switch (op) {
-                    case pdfjsLib.OPS.save: // q
-                        transformStack.push([...currentTransform]);
-                        break;
-                    case pdfjsLib.OPS.restore: // Q
-                        if (transformStack.length > 0) {
-                            currentTransform = transformStack.pop();
-                            logDebug(`  Restored Transform: ${currentTransform.join(', ')}`);
-                        }
-                        break;
-                    case pdfjsLib.OPS.transform: // cm
-                        if (arg && arg.length === 6) {
-                            currentTransform = multiplyMatrix(currentTransform, arg);
-                            logDebug(`  New Transform: ${currentTransform.map(v=>v.toFixed(2)).join(', ')}`);
-                            
-                            // NaN Check
-                            if (currentTransform.some(v => isNaN(v))) {
-                                logDebug(`  !!! ALERT: Transform became NaN !!!`);
-                            }
-                        }
-                        break;
-                    case pdfjsLib.OPS.constructPath: // path
-                        processOperators(arg[0], arg[1]);
-                        break;
-                    case pdfjsLib.OPS.moveTo: // m
-                        {
-                            const pt = applyTransform(arg[0], arg[1], currentTransform);
-                            logDebug(`  moveTo (${arg[0]}, ${arg[1]}) -> (${pt.x}, ${pt.y})`);
-                            if (!isNaN(pt.x) && !isNaN(pt.y)) {
-                                currentX = pt.x;
-                                currentY = pt.y;
-                                pathStart = {x: currentX, y: currentY};
-                            } else {
-                                logDebug(`  !!! Skipped invalid moveTo !!!`);
-                            }
-                        }
-                        break;
-                    case pdfjsLib.OPS.lineTo: // l
-                        {
-                            const pt = applyTransform(arg[0], arg[1], currentTransform);
-                             logDebug(`  lineTo (${arg[0]}, ${arg[1]}) -> (${pt.x}, ${pt.y})`);
-                            if (!isNaN(pt.x) && !isNaN(pt.y)) {
-                                extractedPaths.push({
-                                    type: 'line',
-                                    x1: currentX, y1: currentY,
-                                    x2: pt.x, y2: pt.y,
-                                    color: strokeColor
-                                });
-                                currentX = pt.x;
-                                currentY = pt.y;
-                            } else {
-                                logDebug(`  !!! Skipped invalid lineTo !!!`);
-                            }
-                        }
-                        break;
-                    // ... other ops omitted for debug brevity, but logic remains ...
+            dxf += "0\nENDSEC\n0\nEOF\n";
+            return dxf;
+        }
+
+        function addLine(x1, y1, x2, y2) {
+            return `0\nLINE\n8\n0\n10\n${x1}\n20\n${y1}\n30\n0\n11\n${x2}\n21\n${y2}\n31\n0\n`;
+        }
+
+        function parsePathData(d) {
+            const commands = [];
+            // Clean and split: insert spaces around letters, then split
+            const tokens = d.replace(/([a-zA-Z])/g, ' $1 ').trim().split(/\s+/);
+            
+            let currentX = 0;
+            let currentY = 0;
+            // For Z close path
+            let subpathStartX = 0;
+            let subpathStartY = 0;
+            
+            let currentCmd = null;
+            
+            for (let i = 0; i < tokens.length; i++) {
+                const t = tokens[i];
+                if (['M','m','L','l','Z','z','Q','q','C','c','A','a'].includes(t)) {
+                    currentCmd = t;
+                    
+                    if (currentCmd.toUpperCase() === 'Z') {
+                         commands.push({type: 'Z', values: []});
+                         currentX = subpathStartX;
+                         currentY = subpathStartY;
+                    }
+                } else {
+                    if (!currentCmd) continue;
+                    
+                    // Values processing
+                    const isRelative = (currentCmd === currentCmd.toLowerCase());
+                    const cmdType = currentCmd.toUpperCase();
+                    
+                    const val = parseFloat(t); // First arg
+                    
+                    if (cmdType === 'M') {
+                         if (i + 1 < tokens.length) {
+                             let x = val;
+                             let y = parseFloat(tokens[++i]);
+                             
+                             if (isRelative) {
+                                 x += currentX;
+                                 y += currentY;
+                             }
+                             
+                             currentX = x;
+                             currentY = y;
+                             subpathStartX = x;
+                             subpathStartY = y;
+                             
+                             commands.push({type: 'M', values: [x, y]});
+                             
+                             // After M, subsequent pairs are treated as L (implicit lineto)
+                             // But ImageTracer usually repeats commands. 
+                             // If not, we should handle implicit L. 
+                             // For now assuming explicit commands or ImageTracer structure.
+                         }
+                    } else if (cmdType === 'L') {
+                         if (i + 1 < tokens.length) {
+                             let x = val;
+                             let y = parseFloat(tokens[++i]);
+                             
+                             if (isRelative) {
+                                 x += currentX;
+                                 y += currentY;
+                             }
+                             
+                             commands.push({type: 'L', values: [x, y]});
+                             currentX = x;
+                             currentY = y;
+                         }
+                    } else if (cmdType === 'Q') {
+                         // Q x1 y1 x y
+                         if (i + 3 < tokens.length) {
+                             // Control point (ignored for Line approximation)
+                             let c1x = val;
+                             let c1y = parseFloat(tokens[++i]);
+                             let endX = parseFloat(tokens[++i]);
+                             let endY = parseFloat(tokens[++i]);
+
+                             if (isRelative) {
+                                 // c1x += currentX; c1y += currentY; // Unused
+                                 endX += currentX;
+                                 endY += currentY;
+                             }
+
+                             // Simplify Quad Bezier to Line to end point
+                             commands.push({type: 'L', values: [endX, endY]});
+                             currentX = endX;
+                             currentY = endY;
+                         }
+                    }
+                    // TODO: Add C (Cubic) support if needed (ImageTracer mostly uses Q)
                 }
             }
+            return commands;
         }
 
-        function multiplyMatrix(m1, m2) {
-            const [a1, b1, c1, d1, e1, f1] = m1;
-            const [a2, b2, c2, d2, e2, f2] = m2;
-            return [
-                a1 * a2 + c1 * b2,
-                b1 * a2 + d1 * b2,
-                a1 * c2 + c1 * d2,
-                b1 * c2 + d1 * d2,
-                a1 * e2 + c1 * f2 + e1,
-                b1 * e2 + d1 * f2 + f1
-            ];
-        }
-
-        function applyTransform(x, y, m) {
-            return {
-                x: m[0] * x + m[2] * y + m[4],
-                y: m[1] * x + m[3] * y + m[5]
-            };
-        }
-
-        function getBounds(paths) {
-             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            paths.forEach(p => {
-                minX = Math.min(minX, p.x1, p.x2);
-                minY = Math.min(minY, p.y1, p.y2);
-                maxX = Math.max(maxX, p.x1, p.x2);
-                maxY = Math.max(maxY, p.y1, p.y2);
-            });
-            return {minX, minY, maxX, maxY};
-        }
-
-        function drawPreview(paths) {
-            if (paths.length === 0) return;
-
-            const bounds = getBounds(paths);
-            if (bounds.minX === Infinity) return;
-
-            const margin = 20;
-            let width = bounds.maxX - bounds.minX;
-            let height = bounds.maxY - bounds.minY;
-            
-            if (width === 0) width = 1;
-            if (height === 0) height = 1;
-            
-            const container = document.getElementById('preview-container');
-            const cWidth = container.clientWidth;
-            const cHeight = 500;
-
-            canvas.width = cWidth;
-            canvas.height = cHeight;
-
-            const scaleX = (cWidth - margin * 2) / width;
-            const scaleY = (cHeight - margin * 2) / height;
-            const scale = Math.min(scaleX, scaleY);
-            
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.strokeStyle = '#000';
-            ctx.lineWidth = 1 / scale; 
-
-            ctx.save();
-            ctx.translate(cWidth / 2, cHeight / 2);
-            ctx.scale(scale, -scale); 
-            ctx.translate(-(bounds.minX + width / 2), -(bounds.minY + height / 2));
-
-            ctx.beginPath();
-            paths.forEach(p => {
-                ctx.moveTo(p.x1, p.y1);
-                ctx.lineTo(p.x2, p.y2);
-            });
-            ctx.stroke();
-            ctx.restore();
+        function downloadDxf(content, filename) {
+            const blob = new Blob([content], {type: 'application/dxf'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
     </script>
 </body>
