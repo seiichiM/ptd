@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF to DXF Converter v1.02</title>
+    <title>PDF to DXF Converter v1.04</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -92,6 +92,29 @@
             margin-top: 10px;
             text-align: left;
         }
+        .options-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            align-items: flex-start;
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 5px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .option-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .scale-input {
+            width: 80px;
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
     </style>
     <!-- PDF.js CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -108,7 +131,7 @@
 <body>
 
     <div class="container">
-        <h1>PDF to DXF Converter v1.02</h1>
+        <h1>PDF to DXF Converter v1.04</h1>
         <p>CADから出力されたベクトルPDFをDXFに変換します。</p>
 
         <div class="controls">
@@ -116,6 +139,28 @@
             <input type="file" id="file-input" accept=".pdf">
             <span id="file-name">ファイルが選択されていません</span>
             
+            <div class="options-group">
+                <div class="option-row">
+                    <label>
+                        <input type="checkbox" id="normalize-check" checked>
+                        座標を(0,0)基準に移動する (正規化)
+                    </label>
+                </div>
+                <div class="option-row">
+                    <label for="scale-input">スケール倍率:</label>
+                    <input type="number" id="scale-input" class="scale-input" value="1.0" step="0.1">
+                    <span style="font-size: 0.9em; color: #666;">
+                        (PDF座標 × 倍率 = DXF座標)
+                    </span>
+                </div>
+                <div class="option-row" style="font-size: 0.85em;">
+                    プリセット: 
+                    <button class="preset-btn" onclick="setScale(1.0)" style="padding:2px 8px; font-size:12px; background:#95a5a6;">そのまま(1.0)</button>
+                    <button class="preset-btn" onclick="setScale(0.3528)" style="padding:2px 8px; font-size:12px; background:#95a5a6;">pt→mm (0.3528)</button>
+                    <button class="preset-btn" onclick="setScale(2.835)" style="padding:2px 8px; font-size:12px; background:#95a5a6;">mm→pt (2.835)</button>
+                </div>
+            </div>
+
             <button id="convert-btn" disabled>DXFに変換してダウンロード</button>
         </div>
 
@@ -128,9 +173,8 @@
         <div class="info">
             <p>※ 注意事項:</p>
             <ul>
-                <li>v1.02: 内部パス構造の解析を強化しました。</li>
+                <li>v1.04: スケール倍率の設定機能を追加しました。サイズがおかしい場合は倍率を調整してください。</li>
                 <li>スキャンされた画像PDF（ラスター）は変換できません。線情報を持つPDFのみ対応しています。</li>
-                <li>文字（テキスト）の変換は現在サポートしていません（線分のみ抽出します）。</li>
             </ul>
         </div>
     </div>
@@ -144,6 +188,8 @@
         const convertBtn = document.getElementById('convert-btn');
         const statusDiv = document.getElementById('status');
         const canvas = document.getElementById('preview-canvas');
+        const normalizeCheck = document.getElementById('normalize-check');
+        const scaleInput = document.getElementById('scale-input');
         const ctx = canvas.getContext('2d');
 
         let pdfDoc = null;
@@ -158,6 +204,10 @@
         let transformStack = [];
         let strokeColor = [0, 0, 0];
 
+        function setScale(val) {
+            scaleInput.value = val;
+        }
+
         fileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (file) {
@@ -165,7 +215,6 @@
                 fileNameDisplay.textContent = file.name;
                 convertBtn.disabled = false;
                 statusDiv.textContent = '準備完了。変換ボタンを押してください。';
-                // プレビュークリア
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 extractedPaths = [];
             } else {
@@ -188,7 +237,6 @@
                 statusDiv.textContent = `全 ${pdfDoc.numPages} ページを解析中...`;
                 extractedPaths = [];
 
-                // 全ページ解析
                 for (let i = 1; i <= pdfDoc.numPages; i++) {
                     await processPage(i);
                 }
@@ -197,6 +245,17 @@
                     statusDiv.innerHTML = '<span style="color:red;">線分データが見つかりませんでした。</span><br>これは画像ベース（スキャン）のPDFか、対応していない描画形式の可能性があります。';
                     convertBtn.disabled = false;
                     return;
+                }
+
+                // スケール適用
+                const scaleVal = parseFloat(scaleInput.value) || 1.0;
+                if (scaleVal !== 1.0) {
+                    applyScale(extractedPaths, scaleVal);
+                }
+
+                // 座標正規化処理
+                if (normalizeCheck.checked) {
+                    normalizeCoordinates(extractedPaths);
                 }
 
                 statusDiv.textContent = `解析完了: ${extractedPaths.length} 本の線分を検出。
@@ -221,7 +280,6 @@ DXF生成中...`;
             const page = await pdfDoc.getPage(pageNum);
             const operatorList = await page.getOperatorList();
             
-            // 状態リセット
             currentX = 0;
             currentY = 0;
             pathStart = {x: 0, y: 0};
@@ -256,7 +314,6 @@ DXF生成中...`;
                         strokeColor = arg; 
                         break;
                     case pdfjsLib.OPS.constructPath: // path
-                        // arg[0] = ops, arg[1] = args
                         processOperators(arg[0], arg[1]);
                         break;
                     case pdfjsLib.OPS.moveTo: // m
@@ -348,7 +405,6 @@ DXF生成中...`;
             }
         }
 
-        // 行列乗算: m1 * m2
         function multiplyMatrix(m1, m2) {
             const [a1, b1, c1, d1, e1, f1] = m1;
             const [a2, b2, c2, d2, e2, f2] = m2;
@@ -375,24 +431,55 @@ DXF生成中...`;
             return Math.pow(u, 3) * p0 + 3 * Math.pow(u, 2) * t * p1 + 3 * u * Math.pow(t, 2) * p2 + Math.pow(t, 3) * p3;
         }
 
+        function applyScale(paths, scale) {
+            paths.forEach(p => {
+                p.x1 *= scale;
+                p.y1 *= scale;
+                p.x2 *= scale;
+                p.y2 *= scale;
+            });
+        }
+
+        function normalizeCoordinates(paths) {
+            let minX = Infinity, minY = Infinity;
+            paths.forEach(p => {
+                minX = Math.min(minX, p.x1, p.x2);
+                minY = Math.min(minY, p.y1, p.y2);
+            });
+
+            if (minX === Infinity) return;
+
+            const offsetX = -minX + 10;
+            const offsetY = -minY + 10;
+
+            paths.forEach(p => {
+                p.x1 += offsetX;
+                p.y1 += offsetY;
+                p.x2 += offsetX;
+                p.y2 += offsetY;
+            });
+        }
+
         function generateDXF(paths) {
             let dxf = "";
             dxf += "0\nSECTION\n2\nHEADER\n0\nENDSEC\n";
-            dxf += "0\nSECTION\n2\nTABLES\n0\nENDSEC\n";
+            dxf += "0\nSECTION\n2\nTABLES\n";
+            dxf += "0\nTABLE\n2\nLAYER\n";
+            dxf += "0\nLAYER\n2\n1\n70\n0\n62\n7\n6\nCONTINUOUS\n";
+            dxf += "0\nENDTAB\n";
+            dxf += "0\nENDSEC\n";
+
             dxf += "0\nSECTION\n2\nBLOCKS\n0\nENDSEC\n";
             dxf += "0\nSECTION\n2\nENTITIES\n";
 
             paths.forEach(p => {
                 if (p.type === 'line') {
                     dxf += "0\nLINE\n";
-                    dxf += "8\n0\n"; // Layer 0
+                    dxf += "8\n1\n"; 
                     dxf += `10\n${p.x1}\n`;
                     dxf += `20\n${p.y1}\n`;
                     dxf += `11\n${p.x2}\n`;
                     dxf += `21\n${p.y2}\n`;
-                    // 色: 黒(RGB 0,0,0)なら白(Index 7)にするなどのロジックを入れると見やすいが、
-                    // 一旦標準のByLayerにするため色指定省略（または必要なら入れる）
-                    // dxf += "62\n7\n"; 
                 }
             });
 
@@ -412,14 +499,12 @@ DXF生成中...`;
                 maxY = Math.max(maxY, p.y1, p.y2);
             });
 
-            // 何も描画範囲がない場合
             if (minX === Infinity) return;
 
             const margin = 20;
             let width = maxX - minX;
             let height = maxY - minY;
             
-            // ゼロ幅対策
             if (width === 0) width = 1;
             if (height === 0) height = 1;
             
