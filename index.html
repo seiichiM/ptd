@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF to DXF Converter v1.07</title>
+    <title>PDF to DXF Converter v1.08</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -115,6 +115,21 @@
             border: 1px solid #ccc;
             border-radius: 4px;
         }
+        #debug-info {
+            margin-top: 20px;
+            padding: 10px;
+            background: #eee;
+            border: 1px solid #ccc;
+            font-family: monospace;
+            font-size: 12px;
+            text-align: left;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+            width: 100%;
+            box-sizing: border-box;
+            display: none;
+        }
     </style>
     <!-- PDF.js CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -131,7 +146,7 @@
 <body>
 
     <div class="container">
-        <h1>PDF to DXF Converter v1.07</h1>
+        <h1>PDF to DXF Converter v1.08</h1>
         <p>CADから出力されたベクトルPDFをDXFに変換します。</p>
 
         <div class="controls">
@@ -164,6 +179,7 @@
         </div>
 
         <div id="status"></div>
+        <div id="debug-info"></div>
 
         <div id="preview-container">
             <canvas id="preview-canvas"></canvas>
@@ -172,7 +188,7 @@
         <div class="info">
             <p>※ 注意事項:</p>
             <ul>
-                <li>v1.07: プレビューの描画ロジックを修正しました（線幅を固定化）。</li>
+                <li>v1.08: デバッグ情報表示機能を追加。座標データをチェックします。</li>
                 <li>スキャンされた画像PDF（ラスター）は変換できません。線情報を持つPDFのみ対応しています。</li>
             </ul>
         </div>
@@ -189,6 +205,7 @@
         const canvas = document.getElementById('preview-canvas');
         const normalizeCheck = document.getElementById('normalize-check');
         const scaleInput = document.getElementById('scale-input');
+        const debugInfo = document.getElementById('debug-info');
         const ctx = canvas.getContext('2d');
 
         let pdfDoc = null;
@@ -207,6 +224,16 @@
             scaleInput.value = val;
         }
 
+        function logDebug(msg) {
+            debugInfo.style.display = 'block';
+            debugInfo.textContent += msg + '\n';
+        }
+
+        function clearDebug() {
+            debugInfo.textContent = '';
+            debugInfo.style.display = 'none';
+        }
+
         fileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (file) {
@@ -216,6 +243,7 @@
                 statusDiv.textContent = '準備完了。変換ボタンを押してください。';
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 extractedPaths = [];
+                clearDebug();
             } else {
                 fileNameDisplay.textContent = 'ファイルが選択されていません';
                 convertBtn.disabled = true;
@@ -226,6 +254,7 @@
             if (!pdfFile) return;
 
             try {
+                clearDebug();
                 statusDiv.textContent = 'PDFを読み込み中...';
                 convertBtn.disabled = true;
 
@@ -246,6 +275,17 @@
                     return;
                 }
 
+                // 不正な値を除去
+                const originalCount = extractedPaths.length;
+                extractedPaths = extractedPaths.filter(p => 
+                    !isNaN(p.x1) && !isNaN(p.y1) && !isNaN(p.x2) && !isNaN(p.y2) &&
+                    isFinite(p.x1) && isFinite(p.y1) && isFinite(p.x2) && isFinite(p.y2)
+                );
+                
+                if (extractedPaths.length < originalCount) {
+                    logDebug(`Warning: Removed ${originalCount - extractedPaths.length} invalid paths (NaN/Infinity).`);
+                }
+
                 // スケール適用
                 const scaleVal = parseFloat(scaleInput.value) || 1.0;
                 if (scaleVal !== 1.0) {
@@ -259,6 +299,16 @@
 
                 statusDiv.textContent = `解析完了: ${extractedPaths.length} 本の線分を検出。
 DXF生成中...`;
+                
+                // プレビュー前にデバッグ情報を表示
+                const bounds = getBounds(extractedPaths);
+                logDebug(`Bounds: X[${bounds.minX.toFixed(2)} ~ ${bounds.maxX.toFixed(2)}], Y[${bounds.minY.toFixed(2)} ~ ${bounds.maxY.toFixed(2)}]`);
+                logDebug(`Size: W=${(bounds.maxX - bounds.minX).toFixed(2)}, H=${(bounds.maxY - bounds.minY).toFixed(2)}`);
+                if (extractedPaths.length > 0) {
+                    const p = extractedPaths[0];
+                    logDebug(`First Path: (${p.x1.toFixed(2)}, ${p.y1.toFixed(2)}) -> (${p.x2.toFixed(2)}, ${p.y2.toFixed(2)})`);
+                }
+
                 const dxfContent = generateDXF(extractedPaths);
                 
                 statusDiv.textContent += '\nプレビュー描画中...';
@@ -440,16 +490,11 @@ DXF生成中...`;
         }
 
         function normalizeCoordinates(paths) {
-            let minX = Infinity, minY = Infinity;
-            paths.forEach(p => {
-                minX = Math.min(minX, p.x1, p.x2);
-                minY = Math.min(minY, p.y1, p.y2);
-            });
+            const bounds = getBounds(paths);
+            if (bounds.minX === Infinity) return;
 
-            if (minX === Infinity) return;
-
-            const offsetX = -minX + 10;
-            const offsetY = -minY + 10;
+            const offsetX = -bounds.minX + 10;
+            const offsetY = -bounds.minY + 10;
 
             paths.forEach(p => {
                 p.x1 += offsetX;
@@ -457,6 +502,17 @@ DXF生成中...`;
                 p.x2 += offsetX;
                 p.y2 += offsetY;
             });
+        }
+
+        function getBounds(paths) {
+             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            paths.forEach(p => {
+                minX = Math.min(minX, p.x1, p.x2);
+                minY = Math.min(minY, p.y1, p.y2);
+                maxX = Math.max(maxX, p.x1, p.x2);
+                maxY = Math.max(maxY, p.y1, p.y2);
+            });
+            return {minX, minY, maxX, maxY};
         }
 
         function generateDXF(paths) {
@@ -512,19 +568,12 @@ DXF生成中...`;
         function drawPreview(paths) {
             if (paths.length === 0) return;
 
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            paths.forEach(p => {
-                minX = Math.min(minX, p.x1, p.x2);
-                minY = Math.min(minY, p.y1, p.y2);
-                maxX = Math.max(maxX, p.x1, p.x2);
-                maxY = Math.max(maxY, p.y1, p.y2);
-            });
-
-            if (minX === Infinity) return;
+            const bounds = getBounds(paths);
+            if (bounds.minX === Infinity) return;
 
             const margin = 20;
-            let width = maxX - minX;
-            let height = maxY - minY;
+            let width = bounds.maxX - bounds.minX;
+            let height = bounds.maxY - bounds.minY;
             
             if (width === 0) width = 1;
             if (height === 0) height = 1;
@@ -539,17 +588,19 @@ DXF生成中...`;
             const scaleX = (cWidth - margin * 2) / width;
             const scaleY = (cHeight - margin * 2) / height;
             const scale = Math.min(scaleX, scaleY);
+            
+            // デバッグ表示にスケールを追加
+            logDebug(`Canvas Scale: ${scale.toFixed(4)}`);
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.strokeStyle = '#000';
             
-            // 重要修正: 線幅をスケーリングに追従させない（常に1pxで描画）
             ctx.lineWidth = 1 / scale; 
 
             ctx.save();
             ctx.translate(cWidth / 2, cHeight / 2);
             ctx.scale(scale, -scale); 
-            ctx.translate(-(minX + width / 2), -(minY + height / 2));
+            ctx.translate(-(bounds.minX + width / 2), -(bounds.minY + height / 2));
 
             ctx.beginPath();
             paths.forEach(p => {
