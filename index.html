@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF to DXF Converter v1.01</title>
+    <title>PDF to DXF Converter v1.02</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -71,6 +71,7 @@
             margin-top: 10px;
             font-weight: bold;
             min-height: 24px;
+            white-space: pre-wrap;
         }
         #preview-container {
             margin-top: 20px;
@@ -107,7 +108,7 @@
 <body>
 
     <div class="container">
-        <h1>PDF to DXF Converter</h1>
+        <h1>PDF to DXF Converter v1.02</h1>
         <p>CADから出力されたベクトルPDFをDXFに変換します。</p>
 
         <div class="controls">
@@ -127,9 +128,9 @@
         <div class="info">
             <p>※ 注意事項:</p>
             <ul>
+                <li>v1.02: 内部パス構造の解析を強化しました。</li>
                 <li>スキャンされた画像PDF（ラスター）は変換できません。線情報を持つPDFのみ対応しています。</li>
                 <li>文字（テキスト）の変換は現在サポートしていません（線分のみ抽出します）。</li>
-                <li>変換処理はブラウザ内で完結し、サーバーにファイルは送信されません。</li>
             </ul>
         </div>
     </div>
@@ -147,7 +148,15 @@
 
         let pdfDoc = null;
         let pdfFile = null;
-        let extractedPaths = []; // {type: 'line', x1, y1, x2, y2, color} etc. 
+        let extractedPaths = []; 
+
+        // 状態管理用変数
+        let currentX = 0;
+        let currentY = 0;
+        let pathStart = {x: 0, y: 0};
+        let currentTransform = [1, 0, 0, 1, 0, 0];
+        let transformStack = [];
+        let strokeColor = [0, 0, 0];
 
         fileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
@@ -184,14 +193,21 @@
                     await processPage(i);
                 }
 
-                statusDiv.textContent = 'DXF生成中...';
+                if (extractedPaths.length === 0) {
+                    statusDiv.innerHTML = '<span style="color:red;">線分データが見つかりませんでした。</span><br>これは画像ベース（スキャン）のPDFか、対応していない描画形式の可能性があります。';
+                    convertBtn.disabled = false;
+                    return;
+                }
+
+                statusDiv.textContent = `解析完了: ${extractedPaths.length} 本の線分を検出。
+DXF生成中...`;
                 const dxfContent = generateDXF(extractedPaths);
                 
-                statusDiv.textContent = 'プレビュー描画中...';
+                statusDiv.textContent += '\nプレビュー描画中...';
                 drawPreview(extractedPaths);
 
                 downloadDXF(dxfContent, pdfFile.name.replace('.pdf', '.dxf'));
-                statusDiv.textContent = '変換完了！ダウンロードを開始しました。';
+                statusDiv.textContent += '\n変換完了！ダウンロードを開始しました。';
 
             } catch (error) {
                 console.error(error);
@@ -205,27 +221,21 @@
             const page = await pdfDoc.getPage(pageNum);
             const operatorList = await page.getOperatorList();
             
-            const viewport = page.getViewport({scale: 1.0});
-            // PDF座標系: 原点は左下 (通常)。Y軸は上向き。
-            // Canvas/Screen: 原点は左上。Y軸は下向き。
-            // DXF: 原点は任意だが通常左下基準。
-            
-            // 演算子と引数を解析
+            // 状態リセット
+            currentX = 0;
+            currentY = 0;
+            pathStart = {x: 0, y: 0};
+            transformStack = [];
+            currentTransform = [1, 0, 0, 1, 0, 0]; 
+            strokeColor = [0, 0, 0];
+
             const ops = operatorList.fnArray;
             const args = operatorList.argsArray;
 
-            let currentX = 0;
-            let currentY = 0;
-            let pathStart = {x: 0, y: 0};
-            
-            // 現在の変換行列 (初期単位行列)
-            // [a b c d e f] -> x' = ax + cy + e, y' = bx + dy + f
-            let transformStack = [];
-            let currentTransform = [1, 0, 0, 1, 0, 0]; 
+            processOperators(ops, args);
+        }
 
-            // 線の色など
-            let strokeColor = [0, 0, 0]; // RGB
-
+        function processOperators(ops, args) {
             for (let i = 0; i < ops.length; i++) {
                 const op = ops[i];
                 const arg = args[i];
@@ -240,15 +250,15 @@
                         }
                         break;
                     case pdfjsLib.OPS.transform: // cm
-                        // arg: [a, b, c, d, e, f]
-                        // 行列の掛け合わせが必要
                         currentTransform = multiplyMatrix(currentTransform, arg);
                         break;
-                    
                     case pdfjsLib.OPS.setStrokeRGBColor: // RG
                         strokeColor = arg; 
                         break;
-
+                    case pdfjsLib.OPS.constructPath: // path
+                        // arg[0] = ops, arg[1] = args
+                        processOperators(arg[0], arg[1]);
+                        break;
                     case pdfjsLib.OPS.moveTo: // m
                         {
                             const pt = applyTransform(arg[0], arg[1], currentTransform);
@@ -257,7 +267,6 @@
                             pathStart = {x: currentX, y: currentY};
                         }
                         break;
-                    
                     case pdfjsLib.OPS.lineTo: // l
                         {
                             const pt = applyTransform(arg[0], arg[1], currentTransform);
@@ -271,17 +280,12 @@
                             currentY = pt.y;
                         }
                         break;
-
-                    case pdfjsLib.OPS.curveTo: // c (cubic bezier)
+                    case pdfjsLib.OPS.curveTo: // c
                         {
-                            // arg: [x1, y1, x2, y2, x3, y3]
-                            // ベジェ曲線を線分近似して出力（簡易化）
-                            // またはPOLYLINEにするが、今回は線分分割で近似
                             const p1 = applyTransform(arg[0], arg[1], currentTransform);
                             const p2 = applyTransform(arg[2], arg[3], currentTransform);
                             const p3 = applyTransform(arg[4], arg[5], currentTransform);
                             
-                            // 簡易的にベジェを分割
                             const steps = 10;
                             let prevX = currentX;
                             let prevY = currentY;
@@ -305,10 +309,8 @@
                             currentY = p3.y;
                         }
                         break;
-                    
                     case pdfjsLib.OPS.rectangle: // re
                         {
-                            // arg: [x, y, w, h]
                             const x = arg[0];
                             const y = arg[1];
                             const w = arg[2];
@@ -319,7 +321,6 @@
                             const p3 = applyTransform(x + w, y + h, currentTransform);
                             const p4 = applyTransform(x, y + h, currentTransform);
                             
-                            // 4本の線分を追加
                             const pts = [p1, p2, p3, p4];
                             for(let k=0; k<4; k++) {
                                 extractedPaths.push({
@@ -331,9 +332,7 @@
                             }
                         }
                         break;
-                    
                     case pdfjsLib.OPS.closePath: // h
-                         // start地点に戻る線
                          if (currentX !== pathStart.x || currentY !== pathStart.y) {
                              extractedPaths.push({
                                  type: 'line',
@@ -345,16 +344,12 @@
                              currentY = pathStart.y;
                          }
                         break;
-
-                    // 他のオペレータも必要に応じて追加 (constructPathなど)
                 }
             }
         }
 
         // 行列乗算: m1 * m2
         function multiplyMatrix(m1, m2) {
-            // m1 = [a1, b1, c1, d1, e1, f1]
-            // m2 = [a2, b2, c2, d2, e2, f2]
             const [a1, b1, c1, d1, e1, f1] = m1;
             const [a2, b2, c2, d2, e2, f2] = m2;
 
@@ -382,28 +377,22 @@
 
         function generateDXF(paths) {
             let dxf = "";
-            
-            // Header
             dxf += "0\nSECTION\n2\nHEADER\n0\nENDSEC\n";
-            // Tables
             dxf += "0\nSECTION\n2\nTABLES\n0\nENDSEC\n";
-            // Blocks
             dxf += "0\nSECTION\n2\nBLOCKS\n0\nENDSEC\n";
-            // Entities
             dxf += "0\nSECTION\n2\nENTITIES\n";
 
             paths.forEach(p => {
                 if (p.type === 'line') {
                     dxf += "0\nLINE\n";
                     dxf += "8\n0\n"; // Layer 0
-                    dxf += `10\n${p.x1}\n`; // Start X
-                    dxf += `20\n${p.y1}\n`; // Start Y
-                    dxf += `11\n${p.x2}\n`; // End X
-                    dxf += `21\n${p.y2}\n`; // End Y
-                    
-                    // 色情報 (簡易的に白/黒を7とするなど)
-                    // DXFのカラーインデックスは複雑なので一旦ByLayer(省略)か、色変換を入れる
-                    // ここでは固定
+                    dxf += `10\n${p.x1}\n`;
+                    dxf += `20\n${p.y1}\n`;
+                    dxf += `11\n${p.x2}\n`;
+                    dxf += `21\n${p.y2}\n`;
+                    // 色: 黒(RGB 0,0,0)なら白(Index 7)にするなどのロジックを入れると見やすいが、
+                    // 一旦標準のByLayerにするため色指定省略（または必要なら入れる）
+                    // dxf += "62\n7\n"; 
                 }
             });
 
@@ -415,7 +404,6 @@
         function drawPreview(paths) {
             if (paths.length === 0) return;
 
-            // バウンディングボックス計算
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             paths.forEach(p => {
                 minX = Math.min(minX, p.x1, p.x2);
@@ -424,21 +412,24 @@
                 maxY = Math.max(maxY, p.y1, p.y2);
             });
 
-            // マージン
+            // 何も描画範囲がない場合
+            if (minX === Infinity) return;
+
             const margin = 20;
-            const width = maxX - minX;
-            const height = maxY - minY;
+            let width = maxX - minX;
+            let height = maxY - minY;
             
-            // キャンバスサイズ調整
-            // アスペクト比維持でフィットさせる
+            // ゼロ幅対策
+            if (width === 0) width = 1;
+            if (height === 0) height = 1;
+            
             const container = document.getElementById('preview-container');
             const cWidth = container.clientWidth;
-            const cHeight = 500; // 固定高さ
+            const cHeight = 500;
 
             canvas.width = cWidth;
             canvas.height = cHeight;
 
-            // スケール計算
             const scaleX = (cWidth - margin * 2) / width;
             const scaleY = (cHeight - margin * 2) / height;
             const scale = Math.min(scaleX, scaleY);
@@ -448,10 +439,8 @@
             ctx.lineWidth = 1;
 
             ctx.save();
-            // DXF(PDF)座標はY上向き、CanvasはY下向きなので反転させる必要あり
-            // まず中心に移動
             ctx.translate(cWidth / 2, cHeight / 2);
-            ctx.scale(scale, -scale); // Y反転
+            ctx.scale(scale, -scale); 
             ctx.translate(-(minX + width / 2), -(minY + height / 2));
 
             ctx.beginPath();
