@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF to DXF Converter v1.04</title>
+    <title>PDF to DXF Converter v1.06</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -131,7 +131,7 @@
 <body>
 
     <div class="container">
-        <h1>PDF to DXF Converter v1.04</h1>
+        <h1>PDF to DXF Converter v1.06</h1>
         <p>CADから出力されたベクトルPDFをDXFに変換します。</p>
 
         <div class="controls">
@@ -149,15 +149,14 @@
                 <div class="option-row">
                     <label for="scale-input">スケール倍率:</label>
                     <input type="number" id="scale-input" class="scale-input" value="1.0" step="0.1">
-                    <span style="font-size: 0.9em; color: #666;">
-                        (PDF座標 × 倍率 = DXF座標)
-                    </span>
                 </div>
                 <div class="option-row" style="font-size: 0.85em;">
                     プリセット: 
                     <button class="preset-btn" onclick="setScale(1.0)" style="padding:2px 8px; font-size:12px; background:#95a5a6;">そのまま(1.0)</button>
                     <button class="preset-btn" onclick="setScale(0.3528)" style="padding:2px 8px; font-size:12px; background:#95a5a6;">pt→mm (0.3528)</button>
                     <button class="preset-btn" onclick="setScale(2.835)" style="padding:2px 8px; font-size:12px; background:#95a5a6;">mm→pt (2.835)</button>
+                    <button class="preset-btn" onclick="setScale(10.0)" style="padding:2px 8px; font-size:12px; background:#95a5a6;">10倍</button>
+                    <button class="preset-btn" onclick="setScale(100.0)" style="padding:2px 8px; font-size:12px; background:#95a5a6;">100倍</button>
                 </div>
             </div>
 
@@ -173,7 +172,7 @@
         <div class="info">
             <p>※ 注意事項:</p>
             <ul>
-                <li>v1.04: スケール倍率の設定機能を追加しました。サイズがおかしい場合は倍率を調整してください。</li>
+                <li>v1.06: DXFファイルの生成方式を改善し、アプリ間での互換性を向上させました。</li>
                 <li>スキャンされた画像PDF（ラスター）は変換できません。線情報を持つPDFのみ対応しています。</li>
             </ul>
         </div>
@@ -461,31 +460,56 @@ DXF生成中...`;
         }
 
         function generateDXF(paths) {
-            let dxf = "";
-            dxf += "0\nSECTION\n2\nHEADER\n0\nENDSEC\n";
-            dxf += "0\nSECTION\n2\nTABLES\n";
-            dxf += "0\nTABLE\n2\nLAYER\n";
-            dxf += "0\nLAYER\n2\n1\n70\n0\n62\n7\n6\nCONTINUOUS\n";
-            dxf += "0\nENDTAB\n";
-            dxf += "0\nENDSEC\n";
+            // 文字列連結ではなく配列で管理し、最後に結合することで
+            // 不要な空行の混入を防ぐ堅牢な実装に変更
+            const lines = [];
+            
+            const add = (code, value) => {
+                lines.push(code);
+                lines.push(value);
+            };
 
-            dxf += "0\nSECTION\n2\nBLOCKS\n0\nENDSEC\n";
-            dxf += "0\nSECTION\n2\nENTITIES\n";
+            add(0, "SECTION");
+            add(2, "HEADER");
+            add(0, "ENDSEC");
+            
+            add(0, "SECTION");
+            add(2, "TABLES");
+            add(0, "TABLE");
+            add(2, "LAYER");
+            add(0, "LAYER");
+            add(2, "1");
+            add(70, 0);
+            add(62, 7);
+            add(6, "CONTINUOUS");
+            add(0, "ENDTAB");
+            add(0, "ENDSEC");
+
+            add(0, "SECTION");
+            add(2, "BLOCKS");
+            add(0, "ENDSEC");
+
+            add(0, "SECTION");
+            add(2, "ENTITIES");
 
             paths.forEach(p => {
                 if (p.type === 'line') {
-                    dxf += "0\nLINE\n";
-                    dxf += "8\n1\n"; 
-                    dxf += `10\n${p.x1}\n`;
-                    dxf += `20\n${p.y1}\n`;
-                    dxf += `11\n${p.x2}\n`;
-                    dxf += `21\n${p.y2}\n`;
+                    add(0, "LINE");
+                    add(8, "1"); // Layer 1
+                    add(10, p.x1.toFixed(4));
+                    add(20, p.y1.toFixed(4));
+                    add(30, 0.0);
+                    add(11, p.x2.toFixed(4));
+                    add(21, p.y2.toFixed(4));
+                    add(31, 0.0);
+                    add(62, 1); // Color Red (強制表示)
                 }
             });
 
-            dxf += "0\nENDSEC\n";
-            dxf += "0\nEOF\n";
-            return dxf;
+            add(0, "ENDSEC");
+            add(0, "EOF");
+
+            return lines.join('\n');
         }
 
         function drawPreview(paths) {
